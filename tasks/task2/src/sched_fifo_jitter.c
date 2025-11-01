@@ -1,10 +1,6 @@
 /*
- * Measure jitter of 2ms periodic wakeups under SCHED_FIFO
- * This version includes professional techniques for jitter reduction:
- * - SCHED_FIFO scheduler policy
- * - Pinning the thread to a specific CPU core (CPU affinity)
- * - Locking memory to prevent page faults (mlockall)
- */
+ Измерение джиттера при периодических пробуждениях с интервалом 2 мс под SCHED_FIFO.
+*/
 
 #define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -21,7 +17,7 @@
 
 #ifndef __linux__
 int main(void) {
-    printf("sched_fifo_jitter: Linux-only example (SCHED_FIFO not available)\n");
+    printf("sched_fifo_jitter: пример только для Linux (SCHED_FIFO недоступен)\n");
     return 0;
 }
 #else
@@ -45,43 +41,44 @@ static inline void ns_to_ts(int64_t ns, struct timespec *ts) {
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    // --- 1. Set SCHED_FIFO policy ---
-    // This is the most crucial step. It moves the thread to a real-time scheduler
-    // that preempts all non-RT threads (SCHED_OTHER/NORMAL).
-    // Requires root or CAP_SYS_NICE capability.
+    //1. Установка политики планировщика SCHED_FIFO
+    // Переводим поток в режим реального времени с приоритетом 50.
+    // Это позволяет потоку вытеснять все обычные (SCHED_OTHER) задачи.
     struct sched_param sp = {.sched_priority = 50};
     if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-        perror("WARNING: sched_setscheduler failed; continuing with default scheduler");
+        perror("ПРЕДУПРЕЖДЕНИЕ: не удалось установить SCHED_FIFO; продолжаем с обычным планировщиком");
     } else {
-        printf("Switched to SCHED_FIFO priority %d\n", sp.sched_priority);
+        printf("Установлена политика SCHED_FIFO с приоритетом %d\n", sp.sched_priority);
     }
 
-    // --- 2. Lock memory pages ---
-    // mlockall prevents the process's memory from being paged to swap.
-    // A page fault during a critical section can introduce huge latencies.
+    //2. Блокировка всей памяти процесса
+    // mlockall(MCL_CURRENT | MCL_FUTURE) предотвращает выгрузку страниц памяти в swap.
+    // Page fault во время критического участка может вызвать задержки в миллисекунды.
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        perror("WARNING: mlockall failed");
+        perror("ПРЕДУПРЕЖДЕНИЕ: не удалось заблокировать память (mlockall)");
+    } else {
+        printf("Память процесса заблокирована (нельзя выгружать в swap)\n");
     }
 
-    // --- 3. Set CPU affinity ---
-    // Pinning the thread to a single CPU core prevents the scheduler from migrating
-    // it, which would otherwise flush CPU caches and TLBs, causing latency spikes.
+    //3. Привязка потока к одному ядру CPU
+    // Предотвращает миграцию потока между ядрами, что сохраняет кэш и TLB, уменьшая латентность и джиттер.
     long n_cpus = sysconf(_SC_NPROCESSORS_ONLN);
     if (n_cpus > 0) {
         cpu_set_t cpu_set;
         CPU_ZERO(&cpu_set);
-        // Pin to the last core as it's often less busy with system tasks.
+        // Привязываем к последнему ядру — оно часто менее загружено системными задачами.
         CPU_SET(n_cpus - 1, &cpu_set);
         if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set) != 0) {
-            perror("WARNING: pthread_setaffinity_np failed");
+            perror("ПРЕДУПРЕЖДЕНИЕ: не удалось установить привязку к CPU");
         } else {
-            printf("Pinned thread to CPU %ld\n", n_cpus - 1);
+            printf("Поток привязан к ядру CPU %ld\n", n_cpus - 1);
         }
     }
 
-    const int64_t period = 2 * 1000000LL; /* 2ms */
+    //Основной цикл измерения джиттера
+    const int64_t period = 2 * 1000000LL; // 2 мс = 2000000 нс
     const int samples = 5000;
-    int64_t deltas[samples]; // Store all deltas for percentile calculation
+    int64_t deltas[samples]; // Массив для хранения отклонений (джиттера)
 
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
@@ -90,7 +87,7 @@ int main(void) {
     for (int i = 0; i < samples; ++i) {
         ns_to_ts(next_ns, &next);
         int rc;
-        // Absolute wait is crucial to prevent period drift.
+        // Абсолютное ожидание 
         do {
             rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
         } while (rc == EINTR);
@@ -101,13 +98,12 @@ int main(void) {
 
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        // The "error" or "jitter" for this cycle.
-        // It's the difference between when we woke up and when we *should* have.
+        // Джиттер = фактическое время пробуждения - ожидаемое время
         deltas[i] = ts_to_ns(&now) - next_ns;
         next_ns += period;
     }
 
-    // --- Statistics ---
+    //Расчет статистики
     qsort(deltas, samples, sizeof(int64_t), compare_i64);
     int64_t min = deltas[0];
     int64_t max = deltas[samples - 1];
@@ -118,14 +114,23 @@ int main(void) {
     }
     double avg = (double)sum / (double)samples;
 
-    printf("\nJitter statistics over %d samples (2ms period):\n", samples);
-    printf("  min latency: %" PRId64 " ns\n", min);
-    printf("  avg latency: %.1f ns\n", avg);
-    printf("  99th percentile: %" PRId64 " ns\n", p99);
-    printf("  max latency: %" PRId64 " ns\n", max);
+    printf("\nСтатистика джиттера по %d измерениям (период 2 мс):\n", samples);
+    printf("Минимальная задержка: %" PRId64 " нс\n", min);
+    printf("Средняя задержка: %.1f нс\n", avg);
+    printf("99-й перцентиль: %" PRId64 " нс\n", p99);
+    printf("Максимальная задержка: %" PRId64 " нс\n", max);
 
+    /* До:
+       Джиттер мог достигать десятков или сотен микросекунд из-за:
+         * вытеснения обычным планировщиком,
+         * page faults при обращении к новой памяти,
+         * миграции между ядрами с потерей кэша.
+       После:
+       - SCHED_FIFO гарантирует немедленное пробуждение (если нет других RT-потоков)
+       - mlockall устраняет page faults - нет задержек от диска/swap.
+       - Привязка к CPU сохраняет кэш L1/L2 и TLB - стабильное время доступа к памяти
+       - Джиттер обычно снижается до сотен или даже десятков наносекунд
+    */
     return 0;
 }
 #endif
-
-

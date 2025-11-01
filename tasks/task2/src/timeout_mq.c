@@ -68,7 +68,7 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    // --- Сценарий 1: Таймаут ---
+    //Сценарий 1: Таймаут
     printf("[RECEIVER] Waiting for 100ms on an empty queue, expecting timeout...\n");
     struct timespec ts;
     abs_time_after_ms(&ts, 100);
@@ -82,7 +82,7 @@ int main(void) {
         perror("[RECEIVER] mq_timedreceive error");
     }
 
-    // --- Сценарий 2: Успешное получение ---
+    //Сценарий 2: Успешное получение
     printf("\n[RECEIVER] Starting sender and waiting for up to 1000ms...\n");
     pthread_t th;
     if (pthread_create(&th, NULL, sender, &mq) != 0) {

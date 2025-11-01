@@ -62,7 +62,7 @@ static void *producer(void *arg) {
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    // --- Сценарий 1: Ожидание завершается по таймауту ---
+    //Сценарий 1: Ожидание завершается по таймауту
     printf("[CONSUMER] Doing a timed wait of 100ms, expecting a timeout...\n");
     struct timespec ts;
     pthread_mutex_lock(&mtx);
@@ -78,7 +78,7 @@ int main(void) {
     }
     pthread_mutex_unlock(&mtx);
 
-    // --- Сценарий 2: Успешное ожидание ---
+    //Сценарий 2: Успешное ожидание
     printf("\n[CONSUMER] Starting producer and waiting up to 1000ms...\n");
     pthread_t th;
     if (pthread_create(&th, NULL, producer, NULL) != 0) {

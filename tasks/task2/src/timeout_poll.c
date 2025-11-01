@@ -63,7 +63,7 @@ int main(void) {
     pfd.fd = fds[0]; // Ждем на чтение из pipe
     pfd.events = POLLIN; // Интересующее событие - "есть данные для чтения"
 
-    // --- Сценарий 1: Таймаут ---
+    //Сценарий 1: Таймаут
     printf("[READER] Polling for 300ms, expecting timeout...\n");
     int rc = poll(&pfd, 1, 300); // 1 - кол-во дескрипторов, 300 - таймаут в мс
 
@@ -76,7 +76,7 @@ int main(void) {
         printf("[READER] poll() detected readiness unexpectedly.\n");
     }
 
-    // --- Сценарий 2: Успешное ожидание ---
+    //Сценарий 2: Успешное ожидание
     printf("\n[READER] Starting writer and polling for 1000ms...\n");
     wargs.write_fd = fds[1];
     wargs.delay_ms = 200;
