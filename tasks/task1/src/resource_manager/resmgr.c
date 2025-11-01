@@ -46,27 +46,33 @@ int main(int argc, char *argv[])
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("%s: starting...\n", progname);
     options(argc, argv);
-    install_signals();
+    install_signals();   //устанавливаем обработчики сигналов SIGINT и SIGTERM
 
+    //создаем UNIX-потоковый сокет
     listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_fd == -1) {
         perror("socket");
         return EXIT_FAILURE;
     }
 
+    //подготавливаем адрес сокета
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
+    //копируем путь, оставляя место для завершающего нуля
     strncpy(addr.sun_path, EXAMPLE_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
+    //удаляем старый файл сокета, если он существует (чтобы bind не упал)
     unlink(EXAMPLE_SOCK_PATH);
 
+    //привязываем сокет к файлу
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         perror("bind");
         close(listen_fd);
         return EXIT_FAILURE;
     }
 
+    //переводим сокет в режим прослушивания (максимум 8 ожидающих подключений)
     if (listen(listen_fd, 8) == -1) {
         perror("listen");
         close(listen_fd);
@@ -81,6 +87,7 @@ int main(int argc, char *argv[])
     printf("  echo 'INC' | nc -U %s\n", EXAMPLE_SOCK_PATH);
 
     while (1) {
+        //ждем нового клиента
         int client_fd = accept(listen_fd, NULL, NULL);
         if (client_fd == -1) {
             if (errno == EINTR) continue;
@@ -92,12 +99,14 @@ int main(int argc, char *argv[])
             printf("%s: io_open — новое подключение (fd=%d)\n", progname, client_fd);
         }
 
+        //запускаем новый поток для обработки клиента
         pthread_t th;
         if (pthread_create(&th, NULL, client_thread, (void *)(long)client_fd) != 0) {
             perror("pthread_create");
             close(client_fd);
             continue;
         }
+        //отделяем поток
         pthread_detach(th);
     }
 
@@ -106,8 +115,10 @@ int main(int argc, char *argv[])
     return EXIT_SUCCESS;
 }
 
+//обработка одного клиента
 static void *client_thread(void *arg)
 {
+    //получаем дескриптор клиента
     int fd = (int)(long)arg;
     char buf[1024];
     bool is_first_client = false;
@@ -125,6 +136,7 @@ static void *client_thread(void *arg)
                progname, fd, is_first_client ? "получил" : "не получил");
     }
 
+    //чтение команд от клиента
     for (;;) {
         ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
         if (n == 0) {
@@ -211,10 +223,12 @@ static bool handle_command(int fd, const char *cmd, bool can_write)
     return true;
 }
 
+//аргументы командной строки
 static void options(int argc, char *argv[])
 {
     int opt;
     optv = 0;
+    //поддерживаем только флаг -v (verbose)
     while ((opt = getopt(argc, argv, "v")) != -1) {
         switch (opt) {
             case 'v':
@@ -224,16 +238,19 @@ static void options(int argc, char *argv[])
     }
 }
 
+//установка обработчика сигналов завершения
 static void install_signals(void)
 {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_signal;
+    sa.sa_handler = on_signal;  //указываем функцию-обработчик
     sigemptyset(&sa.sa_mask);
+    //регистрируем обработчик для SIGINT (Ctrl+C) и SIGTERM
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 }
 
+//обработчик сигналов завершения
 static void on_signal(int signo)
 {
     (void)signo;
