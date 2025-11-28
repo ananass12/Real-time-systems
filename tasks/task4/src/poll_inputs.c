@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <linux/input.h>
@@ -26,38 +28,54 @@ int main(int argc, char *argv[]) {
     // Открыть все переданные устройства
     for (int i = 0; i < num_devices; i++) {
         const char *path = argv[i + 1];
-        int fd = open(path, O_RDONLY | O_NONBLOCK); // O_NONBLOCK важен для poll
+        int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd < 0) {
-            perror("Failed to open device");
-            // В реальном приложении здесь нужна более внимательная обработка ошибок
+            if (errno == EACCES) {
+                fprintf(stderr, "Error: Permission denied on %s\n", path);
+            } else {
+                perror("Failed to open device");
+            }
+            // Закрываем уже открытые дескрипторы
+            for (int j = 0; j < i; j++) {
+                close(fds[j].fd);
+            }
             return 1;
         }
 
         fds[i].fd = fd;
-        fds[i].events = POLLIN; // Ждем только события чтения
+        fds[i].events = POLLIN;
+        fds[i].revents = 0;
 
-        // Получаем имя устройства для красивого вывода
-        ioctl(fd, EVIOCGNAME(sizeof(device_names[i])), device_names[i]);
+        // Получаем имя устройства
+        if (ioctl(fd, EVIOCGNAME(sizeof(device_names[i])), device_names[i]) < 0) {
+            snprintf(device_names[i], sizeof(device_names[i]), "device%d", i);
+        }
     }
 
     printf("Polling %d devices. Press Ctrl+C to exit.\n", num_devices);
 
     while (1) {
-        // Вызвать poll() для ожидания событий
-        int ret = poll(fds, num_devices, -1); // -1 означает бесконечное ожидание
+        int ret = poll(fds, num_devices, -1);
         if (ret < 0) {
+            if (errno == EINTR) {
+                continue; // Прервано сигналом (например, Ctrl+C)
+            }
             perror("poll failed");
             break;
         }
 
-        // Проверить, на каких файловых дескрипторах произошли события
         for (int i = 0; i < num_devices; i++) {
             if (fds[i].revents & POLLIN) {
                 struct input_event ev;
-                ssize_t bytes = read(fds[i].fd, &ev, sizeof(ev));
-                if (bytes == sizeof(ev)) {
-                    printf("Event from %s: type %d, code %d, value %d\n",
+                ssize_t bytes;
+                while ((bytes = read(fds[i].fd, &ev, sizeof(ev))) == sizeof(ev)) {
+                    // Выводим событие с именем устройства
+                    printf("[%s] type=%d, code=%d, value=%d\n",
                            device_names[i], ev.type, ev.code, ev.value);
+                }
+                // read() вернёт 0 или -1, когда данных больше нет (благодаря O_NONBLOCK)
+                if (bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    perror("read error");
                 }
             }
         }

@@ -3,10 +3,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <linux/input.h>
-
-// Для Задания 2:
 #include <string.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -27,24 +26,37 @@ int main(int argc, char *argv[]) {
     // Создать буфер для имени устройства
     // Использовать ioctl с EVIOCGNAME для получения имени
     // Вывести имя устройства
+    char name[256] = "Unknown";
+    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
+        perror("Warning: ioctl(EVIOCGNAME) failed");
+        // Продолжаем работу, имя останется "Unknown"
+    } else {
+        printf("Device name: %s\n", name);
+    }
 
+    //Дополнительно физический путь
+    char phys[256] = "Unknown";
+    if (ioctl(fd, EVIOCGPHYS(sizeof(phys)), phys) < 0) {
+        // Не критично, многие устройства не выставляют phys
+    } else {
+        printf("Physical path: %s\n", phys);
+    }
 
     printf("Reading events from %s. Press Ctrl+C to exit.\n", device_path);
 
     struct input_event ev;
     while (1) {
-        // Прочитать структуру input_event из файла устройства
-        ssize_t bytes = read(fd, &ev, sizeof(struct input_event));
-        if (bytes != sizeof(struct input_event)) {
+        ssize_t bytes = read(fd, &ev, sizeof(ev));
+        if (bytes != sizeof(ev)) {
+            if (bytes < 0 && errno == EINTR) {
+                continue; // Прервано сигналом — продолжаем
+            }
             perror("Failed to read event");
             break;
         }
 
-        // Выводим информацию о событии
-        // Для более осмысленного вывода можно смотреть в linux/input-event-codes.h
-        if (ev.type == EV_KEY) { // Интересуют только события клавиатуры
-             printf("Event: type %d, code %d, value %d\n", ev.type, ev.code, ev.value);
-        }
+        // Выводим все события
+        printf("Event: type %d, code %d, value %d\n", ev.type, ev.code, ev.value);
     }
 
     close(fd);
