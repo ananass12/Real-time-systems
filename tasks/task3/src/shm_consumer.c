@@ -5,6 +5,8 @@
  * 2. Открывает существующие семафоры.
  * 3. В цикле читает данные из кольцевого буфера, когда они доступны.
  */
+//#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -54,13 +56,13 @@ int main() {
     printf("Consumer: Semaphores opened.\n");
 
     while (!done) {
-        sem_wait(sem_cons);
+        sem_wait(sem_cons);     // Ждёт, пока будет заполненный элемент
 
         uint64_t value = shared_data->buffer[shared_data->tail];
         printf("Consumed: %llu from index %d\n", (unsigned long long)value, shared_data->tail);
         shared_data->tail = (shared_data->tail + 1) % BUFFER_SIZE;
 
-        sem_post(sem_prod);
+        sem_post(sem_prod);      // Уведомляет: ОСВОБОДИЛОСЬ МЕСТО
         
         usleep(200000); 
     }

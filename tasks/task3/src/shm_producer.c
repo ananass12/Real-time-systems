@@ -7,6 +7,8 @@
  *    - другой показывает, сколько элементов готовы для чтения (для consumer'а).
  * 3. В цикле записывает данные в кольцевой буфер.
  */
+//#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -61,14 +63,14 @@ int main() {
 
     uint64_t counter = 0;
     while (!done) {
-        sem_wait(sem_prod);
+        sem_wait(sem_prod);     // Ждет, пока будет свободное место
 
         shared_data->buffer[shared_data->head] = counter;
         printf("Produced: %llu at index %d\n", (unsigned long long)counter, shared_data->head);
         shared_data->head = (shared_data->head + 1) % BUFFER_SIZE;
         counter++;
 
-        sem_post(sem_cons);
+        sem_post(sem_cons);     // Уведомляет: ПОЯВИЛСЯ НОВЫЙ ЭЛЕМЕНТ
 
         usleep(100000); 
     }
