@@ -1,69 +1,82 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
-#define ARRAY_SIZE (512 * 1024 * 1024) // 512 MB
+#define ARRAY_SIZE (512UL * 1024 * 1024) // 512 MB
 #define PAGE_SIZE 4096
 #define NUM_ITERATIONS 1000
 
-long long timespec_diff_ns(struct timespec start, struct timespec end) {
-    return (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
+static long long timespec_diff_ns(struct timespec a, struct timespec b) {
+    return (b.tv_sec - a.tv_sec) * 1000000000LL + (b.tv_nsec - a.tv_nsec);
 }
 
-int main() {
-    printf("Task 2: Preventing Page Faults with mlockall\n");
+int main(void) {
+    printf("Task 2: mlockall + pre-faulting\n");
 
-    // Заблокировать текущую и будущую память процесса в RAM
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        perror("mlockall failed. Try running with sudo.");
-        return 1;
+        perror("mlockall");
+        fprintf(stderr, "Note: try running with sudo or granting RLIMIT_MEMLOCK capability.\n");
+        // продолжаем, но результаты могут содержать major faults
     }
 
-    char *array = (char *)malloc(ARRAY_SIZE);
+    char *array = malloc(ARRAY_SIZE);
     if (!array) {
-        perror("malloc failed");
+        perror("malloc");
         return 1;
     }
 
-    // "Прогреть" память, чтобы вызвать все minor faults на этапе инициализации
-    printf("Pre-faulting memory...\n");
-    for (size_t i = 0; i < ARRAY_SIZE; i += PAGE_SIZE) {
-        array[i] = 0;
+    // Открываем файл для записи
+    FILE *data_file = fopen("task2_data.csv", "w");
+    if (!data_file) {
+        perror("fopen");
+        free(array);
+        return 1;
     }
-    printf("Memory pre-faulting complete.\n");
+    
+    // Записываем заголовок в CSV файл
+    fprintf(data_file, "Iteration,Latency_ns,MinorFaults,MajorFaults\n");
 
-    struct timespec start_time, end_time;
-    struct rusage usage_before, usage_after;
+    // pre-fault: записать в каждую страницу
+    printf("Pre-faulting memory (touching each page)...\n");
+    for (size_t off = 0; off < ARRAY_SIZE; off += PAGE_SIZE) {
+        array[off] = 0;
+    }
+    printf("Pre-faulting done.\n");
 
-    printf("Iter\tLatency (ns)\tMinor Faults\tMajor Faults\n");
+    struct timespec t1, t2;
+    struct rusage ru_before, ru_after;
 
-    // Сбрасываем статистику перед основным циклом
-    getrusage(RUSAGE_SELF, &usage_before);
-
+    printf("Iter\tLatency_ns\tMinorDiff\tMajorDiff\n");
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
+        getrusage(RUSAGE_SELF, &ru_before);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
 
-        int index = (i * PAGE_SIZE) % ARRAY_SIZE;
-        array[index] = 1;
+        size_t index = ((size_t)i * PAGE_SIZE) % ARRAY_SIZE;
+        array[index] = (char)i;
 
-        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        getrusage(RUSAGE_SELF, &ru_after);
 
-        long long latency = timespec_diff_ns(start_time, end_time);
+        long long lat = timespec_diff_ns(t1, t2);
+        long minor = ru_after.ru_minflt - ru_before.ru_minflt;
+        long major = ru_after.ru_majflt - ru_before.ru_majflt;
 
-        // Замеряем общее количество отказов после цикла
-        // В идеале, оно не должно меняться внутри цикла
-        getrusage(RUSAGE_SELF, &usage_after);
-        long minor_faults = usage_after.ru_minflt - usage_before.ru_minflt;
-        long major_faults = usage_after.ru_majflt - usage_before.ru_majflt;
-
-        printf("%d\t%lld\t\t%ld\t\t%ld\n", i, latency, minor_faults, major_faults);
-        usage_before = usage_after; // Обновляем для следующей итерации
+        printf("%d\t%lld\t%ld\t%ld\n", i, lat, minor, major);
+        fflush(stdout);
+        
+        // Запись в файл
+        fprintf(data_file, "%d,%lld,%ld,%ld\n", i, lat, minor, major);
+        fflush(data_file);
     }
-
+    
+    fclose(data_file);
     free(array);
-    // munlockall() вызывается неявно при завершении процесса
+    
+    printf("Data saved to task2_data.csv\n");
+    // munlockall() не обязателен — при завершении процесса всё сбрасывается
     return 0;
 }

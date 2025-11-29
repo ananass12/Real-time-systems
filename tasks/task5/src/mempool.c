@@ -1,6 +1,8 @@
 #include "mempool.h"
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <stdio.h>
+#include <string.h>
 
 // Узел в связном списке свободных блоков
 typedef struct Node {
@@ -10,12 +12,14 @@ typedef struct Node {
 // Структура, описывающая пул
 struct MemoryPool {
     size_t block_size;
+    size_t block_count;
     Node* free_list_head; 
     void* memory_start;    
     size_t memory_total_size;
 };
 
 MemoryPool* pool_create(size_t block_size, size_t block_count) {
+    if (block_count == 0) return NULL;
     // Размер блока должен быть достаточным, чтобы вместить указатель Node
     if (block_size < sizeof(Node)) {
         block_size = sizeof(Node);
@@ -25,8 +29,9 @@ MemoryPool* pool_create(size_t block_size, size_t block_count) {
     MemoryPool* pool = (MemoryPool*)malloc(sizeof(MemoryPool));
     if (!pool) return NULL;
 
-    pool->block_size = block_size;
-    pool->memory_total_size = block_size * block_count;
+    pool->block_size = ((block_size + (sizeof(void*) - 1)) / sizeof(void*)) * sizeof(void*);
+    pool->block_count = block_count;
+    pool->memory_total_size = pool->block_size * block_count;
 
     // Выделить один большой кусок памяти для всех блоков
     pool->memory_start = malloc(pool->memory_total_size);
@@ -35,43 +40,48 @@ MemoryPool* pool_create(size_t block_size, size_t block_count) {
         return NULL;
     }
 
-    // Заблокировать выделенную память в RAM
-    mlock(pool->memory_start, pool->memory_total_size);
+    // Инициализируем память нулями (опционально)
+    memset(pool->memory_start, 0, pool->memory_total_size);
 
-    // Разметить память как связный список свободных блоков
+    // Попытка заблокировать память
+    if (mlock(pool->memory_start, pool->memory_total_size) != 0) {
+        // Возможна ошибка из-за прав — не фатально, но нужно уведомить
+        perror("mlock failed (continuing without mlock)");
+        // Мы не возвращаем ошибку — пул всё равно работает, но без гарантий от major faults
+    }
+
+    // Построить список свободных блоков
     pool->free_list_head = NULL;
     for (size_t i = 0; i < block_count; ++i) {
-        Node* current_node = (Node*)((char*)pool->memory_start + i * block_size);
-        current_node->next = pool->free_list_head;
-        pool->free_list_head = current_node;
+        Node* node = (Node*)((char*)pool->memory_start + i * pool->block_size);
+        node->next = pool->free_list_head;
+        pool->free_list_head = node;
     }
 
     return pool;
 }
 
 void* pool_alloc(MemoryPool* pool) {
-    // Извлечь первый свободный блок из списка
-    if (!pool || !pool->free_list_head) {
-        return NULL;
-    }
-    Node* block_to_alloc = pool->free_list_head;
-    pool->free_list_head = block_to_alloc->next;
-    return (void*)block_to_alloc;
+    if (!pool) return NULL;
+    Node* n = pool->free_list_head;
+    if (!n) return NULL; // пустой пул
+    pool->free_list_head = n->next;
+    return (void*)n;
 }
 
 void pool_free(MemoryPool* pool, void* block) {
     if (!pool || !block) return;
-
-    // Вернуть блок в начало списка свободных блоков
-    Node* node_to_free = (Node*)block;
-    node_to_free->next = pool->free_list_head;
-    pool->free_list_head = node_to_free;
+    Node* n = (Node*)block;
+    n->next = pool->free_list_head;
+    pool->free_list_head = n;
 }
 
 void pool_destroy(MemoryPool* pool) {
     if (!pool) return;
-    // Разблокировать и освободить всю память
-    munlock(pool->memory_start, pool->memory_total_size);
-    free(pool->memory_start);
+    // Попытка разблокировать
+    if (pool->memory_start) {
+        munlock(pool->memory_start, pool->memory_total_size);
+        free(pool->memory_start);
+    }
     free(pool);
 }

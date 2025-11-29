@@ -1,57 +1,69 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 #include <sys/resource.h>
+#include <unistd.h>
 
-#define ARRAY_SIZE (512 * 1024 * 1024) // 512 MB
+#define ARRAY_SIZE (512UL * 1024 * 1024) // 512 MB
 #define PAGE_SIZE 4096
 #define NUM_ITERATIONS 1000
 
-long long timespec_diff_ns(struct timespec start, struct timespec end) {
-    return (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
+static long long timespec_diff_ns(struct timespec a, struct timespec b) {
+    return (b.tv_sec - a.tv_sec) * 1000000000LL + (b.tv_nsec - a.tv_nsec);
 }
 
-int main() {
-    printf("Task 1: Demonstrating Page Faults\n");
+int main(void) {
+    printf("Task 1: Demonstration of Page Faults\n");
 
-    // Выделить большой массив с помощью malloc
-    char *array = (char *)malloc(ARRAY_SIZE);
+    char *array = malloc(ARRAY_SIZE);
     if (!array) {
-        perror("malloc failed");
+        perror("malloc");
         return 1;
     }
 
-    struct timespec start_time, end_time;
-    struct rusage usage_before, usage_after;
+    // Открываем файл для записи
+    FILE *data_file = fopen("task1_data.csv", "w");
+    if (!data_file) {
+        perror("fopen");
+        free(array);
+        return 1;
+    }
+    
+    // Записываем заголовок в CSV файл
+    fprintf(data_file, "Iteration,Latency_ns,MinorFaults,MajorFaults\n");
 
-    printf("Iter\tLatency (ns)\tMinor Faults\tMajor Faults\n");
+    struct timespec t1, t2;
+    struct rusage ru_before, ru_after;
 
+    printf("Iter\tLatency_ns\tMinorDiff\tMajorDiff\n");
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        // Получить статистику использования ресурсов ДО доступа к памяти (getrusage)
-        getrusage(RUSAGE_SELF, &usage_before);
+        // sample rusage before access
+        getrusage(RUSAGE_SELF, &ru_before);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
 
-        // Замерить время ДО доступа
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
+        size_t index = ((size_t)i * PAGE_SIZE) % ARRAY_SIZE;
+        array[index] = (char)i; // write to page
 
-        // Обратиться к элементу массива с шагом, равным размеру страницы
-        // Это спровоцирует page fault, если страница еще не в памяти
-        int index = (i * PAGE_SIZE) % ARRAY_SIZE;
-        array[index] = 1;
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        getrusage(RUSAGE_SELF, &ru_after);
 
-        // Замерить время ПОСЛЕ доступа
-        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        long long lat = timespec_diff_ns(t1, t2);
+        long minor = ru_after.ru_minflt - ru_before.ru_minflt;
+        long major = ru_after.ru_majflt - ru_before.ru_majflt;
 
-        // Получить статистику использования ресурсов ПОСЛЕ доступа
-        getrusage(RUSAGE_SELF, &usage_after);
-
-        long long latency = timespec_diff_ns(start_time, end_time);
-        long minor_faults = usage_after.ru_minflt - usage_before.ru_minflt;
-        long major_faults = usage_after.ru_majflt - usage_before.ru_majflt;
-
-        printf("%d\t%lld\t\t%ld\t\t%ld\n", i, latency, minor_faults, major_faults);
+        // Вывод в консоль
+        printf("%d\t%lld\t%ld\t%ld\n", i, lat, minor, major);
+        fflush(stdout);
+        
+        // Запись в файл
+        fprintf(data_file, "%d,%lld,%ld,%ld\n", i, lat, minor, major);
+        fflush(data_file);
     }
 
+    fclose(data_file);
     free(array);
+    
+    printf("Data saved to task1_data.csv\n");
     return 0;
 }
